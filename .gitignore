@@ -1,0 +1,11 @@
+# Editors
+.vscode
+.idea
+*.swp
+
+# Test files
+*.test
+
+# Other
+.DS_Store
+
