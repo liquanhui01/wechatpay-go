@@ -6,7 +6,9 @@ package signer
 
 import (
 	"context"
+	"crypto"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -15,14 +17,9 @@ import (
 	"strconv"
 	"time"
 
+	consts "github.com/liquanhui01/wechatpay-go/core/consts"
 	"github.com/liquanhui01/wechatpay-go/core/pkg"
 	utils "github.com/liquanhui01/wechatpay-go/pkg"
-)
-
-const (
-	url    = "https://api.mch.weixin.qq.com/v3/certificates" // 签名请求的url
-	strUrl = "/v3/certificates"                              // 构造字符串中的url
-	schema = "WECHATPAY2-SHA256-RSA2048"                     // 签名认证类型
 )
 
 var (
@@ -31,7 +28,10 @@ var (
 
 // Signer接口
 type Signer interface {
-	Sign(context.Context, *rsa.PrivateKey) (string, error)
+	// 生成签名
+	Sign(context.Context, *rsa.PrivateKey) (*http.Response, error)
+	// 验证签名
+	Validator(*http.Response) error
 }
 
 // 签名商户结构体
@@ -45,29 +45,29 @@ type SHA256WithRSASign struct {
 }
 
 // Sign对msg和商户信息进行签名
-func (s *SHA256WithRSASign) Sign(ctx context.Context, privateKey *rsa.PrivateKey) (string, error) {
+func (s *SHA256WithRSASign) Sign(ctx context.Context, privateKey *rsa.PrivateKey) (*http.Response, error) {
 	if privateKey == nil {
-		return "", fmt.Errorf("PrivateKey should not be nil")
+		return nil, fmt.Errorf("PrivateKey should not be nil")
 	}
 
 	err := pkg.IsEmptyString(s.MchID, s.CertificateSerialNumber)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	nonce_str := utils.RandStringRunes()
 	timeStamp := strconv.FormatInt(time.Now().Unix(), 10)
 
-	signStr := s.buildSignStr(strUrl, nonce_str, timeStamp, "")
+	signStr := s.buildSignStr(consts.BuildMessageUrl, nonce_str, timeStamp, "")
 
 	signature, err := utils.SignSHA256WithRSA(signStr, privateKey)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	resp, err := s.ruquest(ctx, url, nonce_str, signature, timeStamp)
+	resp, err := s.ruquest(ctx, consts.SignatureUrl, nonce_str, signature, timeStamp)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	return resp, nil
@@ -80,16 +80,16 @@ func (s *SHA256WithRSASign) buildMessage(nonce_str, signature, timeStamp string)
 		return "", err
 	}
 
-	signStr := s.getToken(schema, nonce_str, signature, timeStamp)
+	signStr := s.getToken(consts.Schema, nonce_str, signature, timeStamp)
 
 	return signStr, nil
 }
 
 // Ruquest签名发送请求
-func (s *SHA256WithRSASign) ruquest(ctx context.Context, url, nonce_str, signature, timeStamp string) (response string, err error) {
+func (s *SHA256WithRSASign) ruquest(ctx context.Context, url, nonce_str, signature, timeStamp string) (response *http.Response, err error) {
 	clicrt, err := s.getTLS(s.CacertPath, s.CaPath, s.CaKeyPath)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	client := &http.Client{
@@ -103,7 +103,7 @@ func (s *SHA256WithRSASign) ruquest(ctx context.Context, url, nonce_str, signatu
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	auth, _ := s.buildMessage(nonce_str, signature, timeStamp)
 	fmt.Println(auth)
@@ -115,17 +115,13 @@ func (s *SHA256WithRSASign) ruquest(ctx context.Context, url, nonce_str, signatu
 
 	resp, err := client.Do(request)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
+	defer resp.Body.Close()
 	defer client.CloseIdleConnections()
 
-	return string(body), nil
+	return resp, nil
 }
 
 // GetTLS通过指定的路径加载证书
@@ -153,4 +149,44 @@ func (s *SHA256WithRSASign) getToken(schema, nonce_str, signature, timestamp str
 // BuildSignStr根据传入的参数构建签名串用于生成signature使用
 func (s *SHA256WithRSASign) buildSignStr(url, nonce_str, timestamp, body string) string {
 	return fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n", http.MethodGet, url, timestamp, nonce_str, body)
+}
+
+// Validator验证签名
+func (s *SHA256WithRSASign) Validator(resp *http.Response) error {
+	defer resp.Body.Close()
+
+	timeStamp := resp.Header.Get("Wechatpay-Timestamp")
+	nonce := resp.Header.Get("Wechatpay-Nonce")
+	signature := resp.Header.Get("Wechatpay-Signature")
+
+	// 构造签名串
+	cont, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	body := string(cont)
+	respStr := s.buildResonseStr(timeStamp, nonce, body)
+
+	// 解析
+	res, err := utils.DecodeSignature(signature)
+	if err != nil {
+		return err
+	}
+
+	var te *rsa.PublicKey
+
+	hashed := sha256.Sum256([]byte(respStr))
+	err = rsa.VerifyPKCS1v15(te, crypto.SHA256, hashed[:], res)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println((respStr))
+
+	return nil
+}
+
+// buildResonseStr构造验签名串
+func (s *SHA256WithRSASign) buildResonseStr(timeStamp, nonce, body string) string {
+	return fmt.Sprintf("%s\n%s\n%s\n", timeStamp, nonce, body)
 }
