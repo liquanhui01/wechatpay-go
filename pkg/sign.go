@@ -29,3 +29,8 @@ func SignSHA256WithRSA(msg string, privateKey *rsa.PrivateKey) (signature string
 
 	return base64.StdEncoding.EncodeToString(signatureByte), nil
 }
+
+// DecodeSignature解析response中的Wechatpay-Signature
+func DecodeSignature(signature string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(signature)
+}
