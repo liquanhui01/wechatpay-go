@@ -21,8 +21,6 @@ import (
 type Signer interface {
 	// 生成签名
 	Sign(context.Context, *rsa.PrivateKey) (*http.Response, error)
-	// 验证签名
-	Validator(*http.Response) error
 }
 
 // 签名商户结构体
