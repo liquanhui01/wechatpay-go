@@ -4,7 +4,14 @@
 
 package consts
 
-// HTTP请求报文的Header的相关常量
+// HTTP请求的Header常量
+const (
+	Accept      = "application/json"
+	UserAgent   = "https://zh.wikipedia.org/wiki/User_agent"
+	ContentType = "application/json"
+)
+
+// HTTP请求报文回包的Header的相关常量
 const (
 	WechatPayTimeStamp = "Wechatpay-Timestamp" // 微信支付回包时间戳
 	WechatPaySignature = "Wechatpay-Signature" // 微信支付回包的签名信息
